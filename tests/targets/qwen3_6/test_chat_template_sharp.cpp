@@ -118,9 +118,35 @@ void assert_eq(const std::string& actual, const std::string& expected,
     }
 }
 
-// Full-prompt equivalence vs the REAL Sharp v22.1 Jinja oracle.
-// Non-tool fixtures: assert the entire rendered prompt is byte-identical to Sharp.
-// Tool fixtures: report the difference (characterize), do not hard-fail.
+// Canonicalize thinking-marker spelling so C++ output and the Sharp Jinja oracle can be
+// compared byte-for-byte. The C++ renderer intentionally emits upstream-native bare-word
+// markers (" thinking" / " response" -- parsed by the engine's reasoning splitter), while
+// the Sharp v22.1 Jinja template uses XML form ("<think>" / "</think>"). Layout,
+// whitespace, and content are otherwise identical, so after mapping both spellings to
+// canonical sentinel tokens any remaining difference is a REAL divergence.
+void canonicalize_markers(std::string& s) {
+    // Anchored on the surrounding newlines so prose containing the words "thinking" or
+    // "response" can never match. Sentinels \x01/\x02 cannot occur in either spelling.
+    const std::string xml_open = "\n<think>\n";
+    const std::string xml_close = "\n</think>\n\n";
+    const std::string nat_open = "\n thinking\n";
+    const std::string nat_close = "\n response\n\n";
+    std::size_t pos;
+    while ((pos = s.find(xml_open)) != std::string::npos)
+        s.replace(pos, xml_open.size(), "\n\x01\n");
+    while ((pos = s.find(xml_close)) != std::string::npos)
+        s.replace(pos, xml_close.size(), "\n\x02\n\n");
+    while ((pos = s.find(nat_open)) != std::string::npos)
+        s.replace(pos, nat_open.size(), "\n\x01\n");
+    while ((pos = s.find(nat_close)) != std::string::npos)
+        s.replace(pos, nat_close.size(), "\n\x02\n\n");
+}
+
+// Full-prompt equivalence vs the REAL Sharp v22.1 Jinja oracle, modulo thinking-marker
+// spelling (C++ native " thinking"/" response" vs Jinja "<think>"/"</think>" -- see
+// canonicalize_markers above; the marker spelling is an upstream engine contract, not an
+// overlay decision). Non-tool fixtures: entire rendered prompt must match after
+// canonicalization. Tool fixtures: report the difference (characterize), do not hard-fail.
 void compare_sharp_full(const CompiledChatTemplate& sharp, const Fixture& fx,
                         const std::string& effort, bool et, bool pt,
                         const std::string& gold_full) {
@@ -130,16 +156,19 @@ void compare_sharp_full(const CompiledChatTemplate& sharp, const Fixture& fx,
                       " et=" + (et ? "T" : "F") + " pt=" + (pt ? "T" : "F");
     bool has_tools = !fx.tool_jsons.empty();
     if (!has_tools) {
-        if (s_out != gold_full) {
+        std::string act = s_out, exp = gold_full;
+        canonicalize_markers(act);
+        canonicalize_markers(exp);
+        if (act != exp) {
             static int dump = 0;
             if (dump < 6) {
                 std::ofstream d("/home/jie/work/dbg_" + std::to_string(dump) + ".txt");
-                d << "=== CTX " << ctx << " ===\n\n--- ACTUAL (C++) ---\n" << s_out
-                  << "\n\n--- EXPECTED (Sharp Jinja) ---\n" << gold_full;
+                d << "=== CTX " << ctx << " ===\n\n--- ACTUAL (C++, canonicalized) ---\n" << act
+                  << "\n\n--- EXPECTED (Sharp Jinja, canonicalized) ---\n" << exp;
                 ++dump;
             }
         }
-        assert_eq(s_out, gold_full, ctx);
+        assert_eq(act, exp, ctx + " [canonicalized]");
     } else {
         if (s_out != gold_full) {
             std::cerr << "NOTE: tool fixture diverges from Sharp (expected; characterized separately): "
@@ -216,7 +245,10 @@ int main() {
         std::stringstream gold; gold << gf.rdbuf();
         // eff=nullopt + et=false is exactly what translate.cpp produces for requested=none.
         std::string s_out = cpp_render(sharp, fx, std::nullopt, /*et=*/false, /*pt=*/true);
-        assert_eq(s_out, gold.str(), "none->thinking-off end-to-end (prev fixture)");
+        std::string act = s_out, exp = gold.str();
+        canonicalize_markers(act);
+        canonicalize_markers(exp);
+        assert_eq(act, exp, "none->thinking-off end-to-end (prev fixture) [canonicalized]");
     }
 
     if (g_failures == 0) {
