@@ -96,7 +96,7 @@ To reproduce the byte-exact system-block validation and token-efficiency benchma
 
 ```bash
 # 1. Clone and build
-git clone https://github.com/mr-september/ninfer.git
+git clone https://github.com/mr-september/ninfer-sharp.git
 cd ninfer
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
