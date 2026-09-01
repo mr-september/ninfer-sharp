@@ -139,15 +139,28 @@ class CompiledChatTemplate {
 public:
     [[nodiscard]] static CompiledChatTemplate resolve(std::string_view source);
 
+    // Sharp v22.1 chat-style overlay: same compiled template, but the resulting RenderedChat
+    // is annotated with the Sharp v22.1 terseness instruction and a Medium default reasoning
+    // effort. Implemented as a post-render annotation; the official .ninfer artifact and its
+    // embedded chat_template.jinja digest are untouched.
+    [[nodiscard]] static CompiledChatTemplate
+    resolve(std::string_view source, ninfer::ChatStyle chat_style);
+
+    [[nodiscard]] ninfer::ChatStyle chat_style() const noexcept { return chat_style_; }
+    [[nodiscard]] bool is_sharp_v22_1() const noexcept {
+        return chat_style_ == ninfer::ChatStyle::SharpV22_1;
+    }
+
     [[nodiscard]] PromptCapabilities capabilities() const noexcept;
     [[nodiscard]] RenderedChat render(const std::vector<ChatMessage>& messages,
                                       ChatRenderOptions options = {}) const;
 
 private:
-    explicit CompiledChatTemplate(ChatTemplateSemantics semantics) noexcept
-        : semantics_(semantics) {}
+    CompiledChatTemplate(ChatTemplateSemantics semantics, ninfer::ChatStyle chat_style) noexcept
+        : semantics_(semantics), chat_style_(chat_style) {}
 
     ChatTemplateSemantics semantics_;
+    ninfer::ChatStyle     chat_style_;
 };
 
 } // namespace ninfer::targets::qwen3_6::frontend_internal

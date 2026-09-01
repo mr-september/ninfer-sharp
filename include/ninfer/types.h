@@ -310,6 +310,17 @@ struct PromptCapabilities {
     ReasoningEffortCapabilities reasoning_effort;
 };
 
+
+enum class ChatStyle : std::uint8_t {
+    // Stock NInfer chat-template semantics: no overlay applied.
+    Default,
+    // Sharp v22.1 chat-template semantics: appends a terseness instruction to the
+    // leading system content and shifts the default reasoning effort to Medium.
+    // Implemented as a post-render annotation on the CompiledChatTemplate output;
+    // does not modify the official .ninfer artifact or its embedded template hash.
+    SharpV22_1,
+};
+
 enum class PromptContinuationMode : std::uint8_t {
     NewAssistantTurn,
     ContinueFinalAssistant,
@@ -321,6 +332,7 @@ struct PromptOptions {
     std::optional<ReasoningEffort> reasoning_effort;
     bool preserve_thinking = false;
     bool add_vision_id     = false;
+    ChatStyle chat_style   = ChatStyle::Default;
     std::vector<std::string> tool_jsons;
 };
 

@@ -86,13 +86,13 @@ ninfer_add_test(ninfer_cli_options_test
 target_include_directories(ninfer_cli_options_test PRIVATE ${PROJECT_SOURCE_DIR}/apps/cli)
 ninfer_add_test(ninfer_kv_cache_test
   SOURCES test_kv_cache.cpp
-  LIBRARIES ninfer_core)
+  LIBRARIES ninfer_engine ninfer_core)
 ninfer_add_test(ninfer_state_store_test
   SOURCES test_state_store.cpp
-  LIBRARIES ninfer_core)
+  LIBRARIES ninfer_engine ninfer_core)
 ninfer_add_test(ninfer_gdn_replay_records_test
   SOURCES test_gdn_replay_records.cpp
-  LIBRARIES ninfer_core)
+  LIBRARIES ninfer_engine ninfer_core)
 set_tests_properties(
   ninfer_artifact_materialization_test
   ninfer_device_test
@@ -109,6 +109,20 @@ ninfer_add_test(ninfer_qwen3_6_frontend_test
 target_include_directories(ninfer_qwen3_6_frontend_test PRIVATE
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6/export
   ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6/impl)
+
+# Sharp v22.1 chat-style overlay test (mr-september fork, ported to the post-refactor
+# API). NEEDS_SOURCE_DIR for NINFER_TEST_FIXTURE_DIR; LIBRARIES ninfer_engine + ninfer_core
+# because the test directly exercises CompiledChatTemplate::resolve/render/capabilities,
+# which are defined in the qwen3_6 frontend inside ninfer_engine.
+ninfer_add_test(ninfer_qwen3_6_chat_template_sharp_test
+  SOURCES targets/qwen3_6/test_chat_template_sharp.cpp
+  NEEDS_SOURCE_DIR
+  LIBRARIES ninfer_engine ninfer_core)
+target_include_directories(ninfer_qwen3_6_chat_template_sharp_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6/export
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_6/impl)
+target_compile_definitions(ninfer_qwen3_6_chat_template_sharp_test PRIVATE
+  NINFER_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}")
 ninfer_add_test(ninfer_qwen3_6_runtime_mechanisms_test
   SOURCES targets/qwen3_6/test_runtime_mechanisms.cpp
   LIBRARIES ninfer_engine ninfer_core)
@@ -191,7 +205,7 @@ ninfer_add_test(ninfer_request_log_test
   LIBRARIES ninfer_serve)
 ninfer_add_test(ninfer_host_timing_test
   SOURCES test_host_timing.cpp
-  LIBRARIES ninfer_core)
+  LIBRARIES ninfer_engine ninfer_core)
 ninfer_add_test(ninfer_http_error_handler_test
   SOURCES test_http_error_handler.cpp
   LIBRARIES ninfer_serve)

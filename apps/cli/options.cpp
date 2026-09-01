@@ -71,6 +71,12 @@ ReasoningEffort parse_reasoning_effort(std::string_view text) {
     throw std::invalid_argument("invalid reasoning-effort: " + std::string(text));
 }
 
+ChatStyle parse_chat_style(std::string_view text) {
+    if (text == "default")     { return ChatStyle::Default; }
+    if (text == "sharp-v22.1") { return ChatStyle::SharpV22_1; }
+    throw std::invalid_argument("invalid chat-style (use default|sharp-v22.1): " + std::string(text));
+}
+
 } // namespace
 
 std::string usage_text(const char* argv0) {
@@ -84,7 +90,7 @@ std::string usage_text(const char* argv0) {
            "       [--presence-penalty F] [--frequency-penalty F] [--seed N] [--greedy]\n"
            "       [--stop-token-id N]... [--stop <text>]... [--reasoning-stop <text>]...\n"
            "       [--raw-output] [--print-token-ids] [--no-thinking] [--thinking-budget N]\n"
-           "       [--reasoning-effort low|medium|xhigh] [--vision]\n"
+           "       [--reasoning-effort low|medium|xhigh] [--chat-style default|sharp-v22.1] [--vision]\n"
            "       [--no-cuda-graph]\n"
            "\n"
            "Streams answer content to stdout and reasoning plus diagnostics to stderr.\n"
@@ -150,6 +156,8 @@ Options parse_options(int argc, char** argv) {
             options.thinking_budget = parse_u32(value(arg), "thinking-budget");
         } else if (arg == "--reasoning-effort") {
             options.reasoning_effort = parse_reasoning_effort(value(arg));
+        } else if (arg == "--chat-style") {
+            options.chat_style = parse_chat_style(value(arg));
         } else if (arg == "--vision") {
             options.enable_vision = true;
         } else if (arg == "--no-cuda-graph") {

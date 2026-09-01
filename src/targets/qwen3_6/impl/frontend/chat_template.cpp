@@ -36,6 +36,13 @@ constexpr std::string_view kXHighReasoningInstructions =
     "assumptions, consider plausible alternatives, and prioritize correctness, consistency, and "
     "clarity in the final answer.";
 
+// Sharp v22.1 — appended to the leading system content (after any user-supplied system message)
+// when the chat-style overlay is selected. Mirrors the v22.1 Jinja instruction block
+// verbatim so the C++ renderer matches the official Sharp oracle modulo think-marker spelling.
+constexpr std::string_view kSharpV22_1TerseInstruction =
+    "You are a helpful assistant. Use as little text as possible while still being accurate and "
+    "informative. Be concise. Prefer shorter responses when possible. Only answer what was asked.";
+
 bool is_instruction_role(ChatRole role) noexcept {
     return role == ChatRole::System || role == ChatRole::Developer;
 }
@@ -337,7 +344,8 @@ RenderedToolsSystemBlock render_tools_system_block(const std::vector<std::string
 }
 
 std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
-                                                const ChatRenderOptions& options) {
+                                                const ChatRenderOptions& options,
+                                                ninfer::ChatStyle chat_style) {
     if (semantics == ChatTemplateSemantics::ThinkingToggle) {
         if (options.reasoning_effort) {
             throw std::invalid_argument("loaded chat template does not support reasoning effort");
@@ -352,7 +360,12 @@ std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
         return {};
     }
 
-    switch (options.reasoning_effort.value_or(ReasoningEffort::XHigh)) {
+    // Sharp v22.1 default reasoning effort is Medium (terseness tradeoff). Default
+    // chat-style keeps the upstream XHigh default.
+    const ReasoningEffort default_effort = (chat_style == ninfer::ChatStyle::SharpV22_1)
+                                               ? ReasoningEffort::Medium
+                                               : ReasoningEffort::XHigh;
+    switch (options.reasoning_effort.value_or(default_effort)) {
     case ReasoningEffort::Low:
         return kLowReasoningInstructions;
     case ReasoningEffort::Medium:
@@ -412,15 +425,22 @@ RenderedFragment ChatMessage::rendered_content(bool add_vision_id, int* image_co
 }
 
 CompiledChatTemplate CompiledChatTemplate::resolve(std::string_view source) {
+    return resolve(source, ninfer::ChatStyle::Default);
+}
+
+CompiledChatTemplate CompiledChatTemplate::resolve(std::string_view source,
+                                                  ninfer::ChatStyle chat_style) {
     const Sha256Digest digest = sha256(source);
+    ChatTemplateSemantics semantics;
     if (digest == kThinkingToggleTemplateDigest) {
-        return CompiledChatTemplate(ChatTemplateSemantics::ThinkingToggle);
+        semantics = ChatTemplateSemantics::ThinkingToggle;
+    } else if (digest == kReasoningEffortTemplateDigest) {
+        semantics = ChatTemplateSemantics::ReasoningEffort;
+    } else {
+        throw std::invalid_argument("unsupported frontend/chat_template.jinja (sha256 " +
+                                    sha256_hex(digest) + ")");
     }
-    if (digest == kReasoningEffortTemplateDigest) {
-        return CompiledChatTemplate(ChatTemplateSemantics::ReasoningEffort);
-    }
-    throw std::invalid_argument("unsupported frontend/chat_template.jinja (sha256 " +
-                                sha256_hex(digest) + ")");
+    return CompiledChatTemplate(semantics, chat_style);
 }
 
 PromptCapabilities CompiledChatTemplate::capabilities() const noexcept {
@@ -459,7 +479,7 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
 
     const bool effort_template = semantics_ == ChatTemplateSemantics::ReasoningEffort;
     const std::string_view reasoning_instructions =
-        resolve_reasoning_instructions(semantics_, options);
+        resolve_reasoning_instructions(semantics_, options, chat_style_);
 
     std::size_t message_begin = 0;
     RenderedFragment leading_instruction_raw;
@@ -696,6 +716,66 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
         }
     }
     RenderedFragment final = std::move(rendered).release();
+    if (chat_style_ == ninfer::ChatStyle::SharpV22_1 && !final.text.empty()) {
+        // Sharp v22.1 annotation: splice the terseness instruction into the leading system
+        // content. Find the byte at which the system preamble ends (the byte frontier of
+        // the first non-instruction message boundary). message_boundaries has one entry
+        // per input message; when an instruction message was folded into the preamble,
+        // the entry at index 1 marks where the first user-visible message begins.
+        const std::size_t num_boundaries = message_boundaries.size();
+        std::size_t insert_at = std::string::npos;
+        if (message_begin == 1 && num_boundaries > 1 && message_boundaries[1].has_value()) {
+            insert_at = *message_boundaries[1];
+        } else if (num_boundaries > 0 && message_boundaries[0].has_value()) {
+            insert_at = *message_boundaries[0];
+        }
+        if (insert_at == std::string::npos) {
+            // Fallback: locate the first "assistant\n" opener (within the first 64 KiB).
+            constexpr std::size_t kProbeLimit = 64 * 1024;
+            const std::size_t probe = std::min<std::size_t>(final.text.size(), kProbeLimit);
+            const std::size_t found = final.text.find("assistant\n", 0);
+            insert_at = (found != std::string::npos && found <= probe) ? found : 0;
+        }
+        const std::size_t insertion_len = kSharpV22_1TerseInstruction.size() + 2;  // +"\n\n"
+        // Shift existing literal spans whose begin >= insert_at.
+        for (ByteSpan& span : final.literal_spans) {
+            if (span.begin >= insert_at) {
+                span.begin += insertion_len;
+                span.end   += insertion_len;
+            } else if (span.end > insert_at) {
+                span.end += insertion_len;
+            }
+        }
+        // Shift media placeholder byte spans.
+        for (MediaPlaceholderByteSpec& mp : final.media_placeholders) {
+            if (mp.bytes.begin >= insert_at) {
+                mp.bytes.begin += insertion_len;
+                mp.bytes.end   += insertion_len;
+            } else if (mp.bytes.end > insert_at) {
+                mp.bytes.end += insertion_len;
+            }
+        }
+        // Shift message / cache / rewrite boundaries.
+        const auto shift_boundary = [&](std::optional<std::size_t>& b) {
+            if (b.has_value() && *b >= insert_at) { *b += insertion_len; }
+        };
+        for (std::optional<std::size_t>& b : message_boundaries) { shift_boundary(b); }
+        for (std::optional<std::size_t>& b : cache_boundaries)   { shift_boundary(b); }
+        if (rewrite_checkpoint.has_value() && rewrite_checkpoint->offset >= insert_at) {
+            rewrite_checkpoint->offset += insertion_len;
+        }
+        for (std::size_t& offset : rewrite_execution_boundaries) {
+            if (offset >= insert_at) { offset += insertion_len; }
+        }
+        // Splice the instruction into the text buffer.
+        std::string annotated;
+        annotated.reserve(final.text.size() + insertion_len);
+        annotated.append(final.text, 0, insert_at);
+        annotated.append(kSharpV22_1TerseInstruction);
+        annotated.append("\n\n");
+        annotated.append(final.text, insert_at, std::string::npos);
+        final.text = std::move(annotated);
+    }
     return RenderedChat{.text                         = std::move(final.text),
                         .literal_spans                = std::move(final.literal_spans),
                         .media_placeholders           = std::move(final.media_placeholders),

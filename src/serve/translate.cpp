@@ -115,6 +115,7 @@ ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& reques
         .reasoning_effort           = std::nullopt,
         .effective_reasoning_effort = std::nullopt,
         .preserve_thinking          = request.preserve_thinking.value_or(server.preserve_thinking),
+        .chat_style                 = server.chat_style, // request override is not yet wired
     };
     const auto complete = [&]() {
         if (request.continuation == ninfer::PromptContinuationMode::ContinueFinalAssistant &&
@@ -272,6 +273,7 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
     input.options.reasoning_effort                 = semantics.reasoning_effort;
     input.options.preserve_thinking                = semantics.preserve_thinking;
     input.options.add_vision_id                    = false;
+    input.options.chat_style                       = semantics.chat_style;
     const std::vector<const ToolDefinition*> tools = effective_tools(request);
     input.options.tool_jsons.reserve(tools.size());
     for (std::size_t index = 0; index < tools.size(); ++index) {
