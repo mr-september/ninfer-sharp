@@ -60,6 +60,12 @@ KvCapacityPolicy parse_kv_capacity(const char* text) {
     return KvCapacityPolicy::explicit_capacity(static_cast<std::uint32_t>(value));
 }
 
+ChatStyle parse_chat_style(std::string_view text) {
+    if (text == "default")     { return ChatStyle::Default; }
+    if (text == "sharp-v22.1") { return ChatStyle::SharpV22_1; }
+    throw std::invalid_argument("invalid chat-style (use default|sharp-v22.1): " + std::string(text));
+}
+
 } // namespace
 
 std::string serve_usage_text(const char* argv0) {
@@ -79,7 +85,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--kv-dtype bf16|int8|fp8] [--spec mtp|dflash --draft-tokens N] "
            "[--default-max-tokens N] [--default-thinking-budget N] "
            "[--vision] [--no-cuda-graph] [--no-prefix-reuse] "
-           "[--lm-head-draft] [--no-thinking] [--preserve-thinking] [--cors] "
+           "[--lm-head-draft] [--no-thinking] [--chat-style default|sharp-v22.1] [--preserve-thinking] [--cors] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
            "[--frequency-penalty F] [--seed N] [--greedy]\n"
            "       serves OpenAI Responses/Chat Completions and Anthropic Messages endpoints\n"
@@ -285,6 +291,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.speculative.proposal_head = ProposalHead::Optimized;
         } else if (arg == "--no-thinking") {
             options.enable_thinking = false;
+        } else if (arg == "--chat-style") {
+            options.chat_style = parse_chat_style(require_value("--chat-style"));
         } else if (arg == "--preserve-thinking") {
             options.preserve_thinking = true;
         } else if (arg == "--cors") {
