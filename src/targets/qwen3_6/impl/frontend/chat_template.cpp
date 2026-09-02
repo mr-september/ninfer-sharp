@@ -36,13 +36,8 @@ constexpr std::string_view kXHighReasoningInstructions =
     "assumptions, consider plausible alternatives, and prioritize correctness, consistency, and "
     "clarity in the final answer.";
 
-// Sharp v22.1 — appended to the leading system content (after any user-supplied system message)
-// when the chat-style overlay is selected. Mirrors the v22.1 Jinja instruction block
-// verbatim so the C++ renderer matches the official Sharp oracle modulo think-marker spelling.
-constexpr std::string_view kSharpV22_1TerseInstruction =
-    "You are a helpful assistant. Use as little text as possible while still being accurate and "
-    "informative. Be concise. Prefer shorter responses when possible. Only answer what was asked.";
-
+// Sharp v22.1 terseness instruction is defined in chat_template.h so tests can
+// reference the production constant.
 bool is_instruction_role(ChatRole role) noexcept {
     return role == ChatRole::System || role == ChatRole::Developer;
 }
@@ -344,8 +339,7 @@ RenderedToolsSystemBlock render_tools_system_block(const std::vector<std::string
 }
 
 std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
-                                                const ChatRenderOptions& options,
-                                                ninfer::ChatStyle chat_style) {
+                                                const ChatRenderOptions& options) {
     if (semantics == ChatTemplateSemantics::ThinkingToggle) {
         if (options.reasoning_effort) {
             throw std::invalid_argument("loaded chat template does not support reasoning effort");
@@ -362,7 +356,7 @@ std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
 
     // Sharp v22.1 default reasoning effort is Medium (terseness tradeoff). Default
     // chat-style keeps the upstream XHigh default.
-    const ReasoningEffort default_effort = (chat_style == ninfer::ChatStyle::SharpV22_1)
+    const ReasoningEffort default_effort = (options.chat_style == ninfer::ChatStyle::SharpV22_1)
                                                ? ReasoningEffort::Medium
                                                : ReasoningEffort::XHigh;
     switch (options.reasoning_effort.value_or(default_effort)) {
@@ -482,7 +476,7 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
 
     const bool effort_template = semantics_ == ChatTemplateSemantics::ReasoningEffort;
     const std::string_view reasoning_instructions =
-        resolve_reasoning_instructions(semantics_, options, chat_style_);
+        resolve_reasoning_instructions(semantics_, options);
 
     std::size_t message_begin = 0;
     RenderedFragment leading_instruction_raw;
@@ -719,9 +713,7 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
         }
     }
     RenderedFragment final = std::move(rendered).release();
-
     if (chat_style_ == ninfer::ChatStyle::SharpV22_1 && !final.text.empty()) {
-
         // Sharp v22.1 annotation: splice the terseness instruction into the leading system
         // content. Find the byte at which the system preamble ends (the byte frontier of
         // the first non-instruction message boundary). message_boundaries has one entry

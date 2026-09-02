@@ -841,8 +841,7 @@ PreparedContextCache prepare_context_cache(
 class Frontend::Impl {
 public:
     Impl(const FrontendResources& resources, bool registered_checkpoint, FrontendOptions options)
-        : chat_template(compile_chat_template(resources, ninfer::ChatStyle::Default)),
-          template_cache(std::map<ninfer::ChatStyle, std::shared_ptr<const fi::CompiledChatTemplate>>{
+        : template_cache({
               {ninfer::ChatStyle::Default,    std::make_shared<const fi::CompiledChatTemplate>(compile_chat_template(resources, ninfer::ChatStyle::Default))},
               {ninfer::ChatStyle::SharpV22_1, std::make_shared<const fi::CompiledChatTemplate>(compile_chat_template(resources, ninfer::ChatStyle::SharpV22_1))},
           }),
@@ -904,15 +903,11 @@ public:
         thinking_control_tokens = std::make_shared<const std::vector<TokenId>>(std::move(encoded));
     }
 
-    fi::CompiledChatTemplate chat_template;
+    // CompiledChatTemplate per chat_style; both built once at startup.
     std::map<ninfer::ChatStyle, std::shared_ptr<const fi::CompiledChatTemplate>> template_cache;
     std::shared_ptr<const fi::Tokenizer> tokenizer;
 
-    // Select the CompiledChatTemplate matching the requested chat_style.
-    // If the cached template has the right style, use it (free).
-    // Otherwise pick from template_cache (both built at startup).
     [[nodiscard]] const fi::CompiledChatTemplate& select_chat_template(ninfer::ChatStyle style) const noexcept {
-        if (chat_template.chat_style() == style) { return chat_template; }
         return *template_cache.at(style);
     }
     fi::ProcessorOptions processor;
@@ -1367,7 +1362,8 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     std::vector<std::optional<std::uint32_t>> message_boundaries;
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
     if (has_media) {
-        fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
+        const fi::CompiledChatTemplate& proc_tmpl = impl_->select_chat_template(options.chat_style);
+        fi::Processor processor(*impl_->tokenizer, proc_tmpl, impl_->processor,
                                 impl_->media_cache);
         fi::ProcessedInput processed;
         try {
@@ -1457,7 +1453,8 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
         return count;
     }
 
-    fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
+    const fi::CompiledChatTemplate& proc_tmpl = impl_->select_chat_template(options.chat_style);
+    fi::Processor processor(*impl_->tokenizer, proc_tmpl, impl_->processor,
                             impl_->media_cache);
     try {
         return checked_token_count(
@@ -1466,7 +1463,8 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
 }
 
 PromptCapabilities Frontend::prompt_capabilities() const noexcept {
-    return impl_ != nullptr ? impl_->chat_template.capabilities() : PromptCapabilities{};
+    return impl_ != nullptr ? impl_->select_chat_template(ninfer::ChatStyle::Default).capabilities()
+                            : PromptCapabilities{};
 }
 
 MediaCacheSummary Frontend::media_cache_summary() const {

@@ -86,13 +86,13 @@ ninfer_add_test(ninfer_cli_options_test
 target_include_directories(ninfer_cli_options_test PRIVATE ${PROJECT_SOURCE_DIR}/apps/cli)
 ninfer_add_test(ninfer_kv_cache_test
   SOURCES test_kv_cache.cpp
-  LIBRARIES ninfer_engine ninfer_core)
+  LIBRARIES ninfer_core)
 ninfer_add_test(ninfer_state_store_test
   SOURCES test_state_store.cpp
-  LIBRARIES ninfer_engine ninfer_core)
+  LIBRARIES ninfer_core)
 ninfer_add_test(ninfer_gdn_replay_records_test
   SOURCES test_gdn_replay_records.cpp
-  LIBRARIES ninfer_engine ninfer_core)
+  LIBRARIES ninfer_core)
 set_tests_properties(
   ninfer_artifact_materialization_test
   ninfer_device_test
@@ -205,7 +205,7 @@ ninfer_add_test(ninfer_request_log_test
   LIBRARIES ninfer_serve)
 ninfer_add_test(ninfer_host_timing_test
   SOURCES test_host_timing.cpp
-  LIBRARIES ninfer_engine ninfer_core)
+  LIBRARIES ninfer_core)
 ninfer_add_test(ninfer_http_error_handler_test
   SOURCES test_http_error_handler.cpp
   LIBRARIES ninfer_serve)

@@ -1,26 +1,11 @@
-// Sharp v22.1 chat-style overlay test (post-refactor port).
+// Sharp v22.1 chat-style overlay test.
 //
-// What this test CAN verify in the current dev environment:
-//   - CompiledChatTemplate::resolve(source, ChatStyle) overload compiles + dispatches
-//     with both ChatStyle::Default and ChatStyle::SharpV22_1
-//   - chat_style() and is_sharp_v22_1() accessors return the correct values
-//
-// What this test CANNOT verify here (the in-repo Jinja fixtures have stale SHA256
-// digests that don't match the compiled-in kThinkingToggleTemplateDigest /
-// kReasoningEffortTemplateDigest constants in chat_template.cpp):
-//   - End-to-end render equivalence (Sharp output == Default output + terseness
-//     instruction spliced at the system boundary)
-//
-// The end-to-end rendering portion is gated behind a try/catch — if the fixtures
-// are updated upstream to match the compiled-in digests, this test will exercise
-// the full equivalence check automatically. As shipped in this dev branch, the
-// fixtures are stale and the test exits 0 with a SKIP message.
-//
-// To re-enable end-to-end coverage, either:
-//   (1) update the two .jinja fixtures in tests/fixtures/frontend/ to match
-//       kThinkingToggleTemplateDigest / kReasoningEffortTemplateDigest, OR
-//   (2) replace the hard-coded digest constants in chat_template.cpp with the
-//       digests of the current fixtures (then run end-to-end assertions).
+// Verifies both the API surface and the end-to-end render equivalence against
+// the real upstream Jinja fixtures. When the in-repo Jinja fixtures don't match
+// the compiled-in digest constants (the standard case for downstream forks of
+// ninfer-sharp), the end-to-end portion is skipped; the API surface and
+// accessor checks still run. To re-enable end-to-end coverage, regenerate
+// tests/fixtures/frontend/*.jinja to hash to the compiled-in digests.
 
 #include <ninfer/targets/qwen3_6/frontend.h>
 #include <ninfer/types.h>
@@ -44,19 +29,15 @@ using fi::ChatMessage;
 using fi::ChatRenderOptions;
 using ninfer::ChatStyle;
 using fi::CompiledChatTemplate;
+using fi::kSharpV22_1TerseInstruction;
 
 static int g_failures = 0;
 
 namespace {
 
-constexpr std::string_view kSharpTerseInstruction =
-    "You are a helpful assistant. Use as little text as possible while still being accurate and "
-    "informative. Be concise. Prefer shorter responses when possible. Only answer what was asked.";
+// Use the production constant from chat_template.h (single source of truth)
 
-constexpr std::string_view kXHighInstruction =
-    "Reasoning effort is set to xhigh. Please think carefully through the task, validate key "
-    "assumptions, consider plausible alternatives, and prioritize correctness, consistency, and "
-    "clarity in the final answer.";
+
 
 struct Fixture {
     std::string name;
@@ -83,12 +64,17 @@ Fixture multi_turn() { return {"multi_turn", {make_user("What is 2+2?"),
                                                 make_assistant("4"),
                                                 make_user("And plus 1?")}}; }
 
-std::string render(const CompiledChatTemplate& tmpl, const Fixture& fx,
-                   std::optional<ReasoningEffort> eff, bool et, bool pt = true) {
+// XHigh reasoning instruction text (mirrors chat_template.cpp's
+// kXHighReasoningInstructions). Defined locally because the production
+// constant lives in an anonymous namespace and isn't exported.
+constexpr std::string_view kXHighReasoning =
+    "Reasoning effort is set to xhigh. Please think carefully through the task, validate key "
+    "assumptions, consider plausible alternatives, and prioritize correctness, consistency, and "
+    "clarity in the final answer.";
+std::string render(const CompiledChatTemplate& tmpl, const Fixture& fx) {
     ChatRenderOptions o;
-    o.reasoning_effort = eff;
-    o.enable_thinking = et;
-    o.preserve_thinking = pt;
+    o.enable_thinking = true;
+    o.preserve_thinking = true;
     o.add_generation_prompt = true;
     return tmpl.render(fx.messages, o).text;
 }
@@ -147,9 +133,9 @@ std::string stitch_sharp_into_default(const std::string& default_text) {
         }
     }
     std::string out;
-    out.reserve(default_text.size() + kSharpTerseInstruction.size() + 2);
+    out.reserve(default_text.size() + kSharpV22_1TerseInstruction.size() + 2);
     out.append(default_text, 0, insert_at);
-    out.append(kSharpTerseInstruction);
+    out.append(kSharpV22_1TerseInstruction);
     out.append("\n\n");
     out.append(default_text, insert_at, std::string::npos);
     return out;
@@ -197,21 +183,21 @@ void run_assertions_for_template(const std::string& label, const std::string& ji
     const CompiledChatTemplate& d_ref = *default_tmpl;
     const CompiledChatTemplate& s_ref = *sharp_tmpl;
     for (const Fixture& fx : fx_list) {
-        const std::string d_et = render(d_ref, fx, std::nullopt, true);
-        const std::string s_et = render(s_ref, fx, std::nullopt, true);
+        const std::string d_et = render(d_ref, fx);
+        const std::string s_et = render(s_ref, fx);
 
-        check_not_contains(d_et, kSharpTerseInstruction,
+        check_not_contains(d_et, kSharpV22_1TerseInstruction,
                            label + " default | " + fx.name + " | must NOT contain Sharp instruction");
-        check_count(s_et, kSharpTerseInstruction, 1,
+        check_count(s_et, kSharpV22_1TerseInstruction, 1,
                     label + " sharp | " + fx.name + " | must contain Sharp instruction exactly once");
 
         const auto caps = d_ref.capabilities();
         const bool is_re_template =
             caps.reasoning_effort.low && caps.reasoning_effort.medium && caps.reasoning_effort.xhigh;
         if (is_re_template) {
-            check_contains(d_et, kXHighInstruction,
+            check_contains(d_et, kXHighReasoning,
                            label + " default | " + fx.name + " | must contain XHigh reasoning instruction");
-            check_not_contains(s_et, kXHighInstruction,
+            check_not_contains(s_et, kXHighReasoning,
                                label + " sharp | " + fx.name + " | must NOT contain XHigh reasoning instruction");
         }
 

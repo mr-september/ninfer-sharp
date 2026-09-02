@@ -136,6 +136,13 @@ enum class ChatTemplateSemantics : std::uint8_t {
     ReasoningEffort,
 };
 
+// Sharp v22.1 chat-style terseness instruction, appended to the leading system
+// content by the Sharp overlay. Exposed so tests can reference the production
+// constant instead of duplicating the string.
+inline constexpr std::string_view kSharpV22_1TerseInstruction =
+    "You are a helpful assistant. Use as little text as possible while still being accurate and "
+    "informative. Be concise. Prefer shorter responses when possible. Only answer what was asked.";
+
 class CompiledChatTemplate {
 public:
     [[nodiscard]] static CompiledChatTemplate resolve(std::string_view source);
@@ -157,7 +164,7 @@ public:
                                       ChatRenderOptions options = {}) const;
 
 private:
-    CompiledChatTemplate(ChatTemplateSemantics semantics, ninfer::ChatStyle chat_style) noexcept
+    explicit CompiledChatTemplate(ChatTemplateSemantics semantics, ninfer::ChatStyle chat_style) noexcept
         : semantics_(semantics), chat_style_(chat_style) {}
 
     ChatTemplateSemantics semantics_;

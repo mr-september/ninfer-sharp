@@ -310,7 +310,6 @@ struct PromptCapabilities {
     ReasoningEffortCapabilities reasoning_effort;
 };
 
-
 enum class ChatStyle : std::uint8_t {
     // Stock NInfer chat-template semantics: no overlay applied.
     Default,
