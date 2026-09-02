@@ -224,9 +224,9 @@ void validate_tokenizer_config(const FrontendResources& resources) {
     }
 }
 
-fi::CompiledChatTemplate compile_chat_template(const FrontendResources& resources) {
+fi::CompiledChatTemplate compile_chat_template(const FrontendResources& resources, ninfer::ChatStyle chat_style) {
     validate_tokenizer_config(resources);
-    return fi::CompiledChatTemplate::resolve(resources.chat_template_jinja);
+    return fi::CompiledChatTemplate::resolve(resources.chat_template_jinja, chat_style);
 }
 
 [[noreturn]] void throw_processor_error(const fi::ProcessorError& error) {
@@ -841,7 +841,11 @@ PreparedContextCache prepare_context_cache(
 class Frontend::Impl {
 public:
     Impl(const FrontendResources& resources, bool registered_checkpoint, FrontendOptions options)
-        : chat_template(compile_chat_template(resources)),
+        : chat_template(compile_chat_template(resources, ninfer::ChatStyle::Default)),
+          template_cache(std::map<ninfer::ChatStyle, std::shared_ptr<const fi::CompiledChatTemplate>>{
+              {ninfer::ChatStyle::Default,    std::make_shared<const fi::CompiledChatTemplate>(compile_chat_template(resources, ninfer::ChatStyle::Default))},
+              {ninfer::ChatStyle::SharpV22_1, std::make_shared<const fi::CompiledChatTemplate>(compile_chat_template(resources, ninfer::ChatStyle::SharpV22_1))},
+          }),
           tokenizer(std::make_shared<const fi::Tokenizer>(
               fi::TokenizerResources{.tokenizer_json         = resources.tokenizer_json,
                                      .tokenizer_config_json  = resources.tokenizer_config_json,
@@ -901,7 +905,16 @@ public:
     }
 
     fi::CompiledChatTemplate chat_template;
+    std::map<ninfer::ChatStyle, std::shared_ptr<const fi::CompiledChatTemplate>> template_cache;
     std::shared_ptr<const fi::Tokenizer> tokenizer;
+
+    // Select the CompiledChatTemplate matching the requested chat_style.
+    // If the cached template has the right style, use it (free).
+    // Otherwise pick from template_cache (both built at startup).
+    [[nodiscard]] const fi::CompiledChatTemplate& select_chat_template(ninfer::ChatStyle style) const noexcept {
+        if (chat_template.chat_style() == style) { return chat_template; }
+        return *template_cache.at(style);
+    }
     fi::ProcessorOptions processor;
     std::shared_ptr<fi::MediaPreprocessCache> media_cache;
     StopPolicy defaults;
@@ -1392,8 +1405,9 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         message_boundaries = std::move(processed.message_boundaries);
         cache_boundaries   = std::move(processed.cache_boundaries);
     } else {
+        const fi::CompiledChatTemplate& tmpl = impl_->select_chat_template(options.chat_style);
         const fi::RenderedChat rendered =
-            impl_->chat_template.render(messages, render_options(options, rendered_markers));
+            tmpl.render(messages, render_options(options, rendered_markers));
         const auto tokenize_started = Clock::now();
         fi::EncodedChat encoded     = fi::encode_rendered_chat(
             *impl_->tokenizer, rendered, static_cast<std::size_t>(impl_->max_context) + 1U);
@@ -1434,8 +1448,9 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
         throw std::invalid_argument("Vision is disabled for this Engine");
     }
     if (!has_media) {
+        const fi::CompiledChatTemplate& tmpl = impl_->select_chat_template(options.chat_style);
         const fi::RenderedChat rendered =
-            impl_->chat_template.render(messages, render_options(options));
+            tmpl.render(messages, render_options(options));
         const std::uint32_t count = checked_token_count(
             fi::encode_rendered_chat(*impl_->tokenizer, rendered).input_ids.size());
         fi::check_preparation_control(control, "tokenization");
