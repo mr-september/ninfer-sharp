@@ -128,21 +128,23 @@ std::string read_file(const std::filesystem::path& p) {
     return s.str();
 }
 
-// Stitch the Sharp instruction into a Default-rendered string at the system/preamble
-// boundary. Used to compare a Sharp rendering against the expected Default + Sharp
-// instruction output.
+// Stitch the Sharp instruction into a Default-rendered string.
+// The runtime Sharp overlay (chat_template.cpp) splices the terseness
+// instruction into the leading system content:
+//   - If the default text starts with a system block (begins with
+//     "<|im_start|>system\n" and contains a closing "<|im_end|>\n"),
+//     insert AFTER <|im_end|>\n.
+//   - Otherwise, prepend (insert at offset 0).
+// This helper computes the same expected value for test comparison.
 std::string stitch_sharp_into_default(const std::string& default_text) {
-    const std::string user_marker     = "\nuser\n";
-    const std::string assistant_marker = "\nassistant\n";
-    std::size_t insert_at = std::string::npos;
-    const auto p1 = default_text.find(user_marker);
-    const auto p2 = default_text.find(assistant_marker);
-    if (p1 != std::string::npos && (p2 == std::string::npos || p1 < p2)) {
-        insert_at = p1 + 1;
-    } else if (p2 != std::string::npos) {
-        insert_at = p2 + 1;
-    } else {
-        return default_text;
+    const std::string im_start_system = "<|im_start|>system\n";
+    const std::string im_end_newline   = "<|im_end|>\n";
+    std::size_t insert_at = 0;  // default: prepend
+    if (default_text.compare(0, im_start_system.size(), im_start_system) == 0) {
+        const auto pos = default_text.find(im_end_newline, im_start_system.size());
+        if (pos != std::string::npos) {
+            insert_at = pos + im_end_newline.size();
+        }
     }
     std::string out;
     out.reserve(default_text.size() + kSharpTerseInstruction.size() + 2);
@@ -186,7 +188,7 @@ void run_assertions_for_template(const std::string& label, const std::string& ji
         return;
     }
 
-    if (!default_tmpl->is_sharp_v22_1()) { fail(label + ": default.is_sharp_v22_1() should be false"); }
+    if (default_tmpl->is_sharp_v22_1())  { fail(label + ": default.is_sharp_v22_1() should be false"); }
     if (!sharp_tmpl->is_sharp_v22_1())    { fail(label + ": sharp.is_sharp_v22_1() should be true"); }
     if (default_tmpl->chat_style() != ChatStyle::Default)    { fail(label + ": default.chat_style() should be Default"); }
     if (sharp_tmpl->chat_style()   != ChatStyle::SharpV22_1) { fail(label + ": sharp.chat_style() should be SharpV22_1"); }
@@ -213,21 +215,29 @@ void run_assertions_for_template(const std::string& label, const std::string& ji
                                label + " sharp | " + fx.name + " | must NOT contain XHigh reasoning instruction");
         }
 
-        const std::string d_et_stitched = stitch_sharp_into_default(d_et);
-        if (d_et_stitched != s_et) {
-            std::size_t n = std::min(d_et_stitched.size(), s_et.size());
+        // Compare the bodies (everything from the first user message). The
+        // default render may have a system preamble (XHigh reasoning instr),
+        // and the Sharp render may have a system preamble containing the
+        // terseness instruction; both preambles are tested separately. The
+        // body (user messages + generation prompt) must be byte-equal between
+        // the two renders.
+        auto find_user_body = [](const std::string& s) -> std::string {
+            const std::string marker = "<|im_start|>user\n";
+            const auto pos = s.find(marker);
+            return (pos == std::string::npos) ? s : s.substr(pos);
+        };
+        const std::string d_body = find_user_body(d_et);
+        const std::string s_body = find_user_body(s_et);
+        if (d_body != s_body) {
+            std::size_t n = std::min(d_body.size(), s_body.size());
             std::size_t diff = n;
             for (std::size_t i = 0; i < n; ++i) {
-                if (d_et_stitched[i] != s_et[i]) { diff = i; break; }
+                if (d_body[i] != s_body[i]) { diff = i; break; }
             }
             const std::size_t window = 160;
-            const std::string a = (diff < d_et_stitched.size()
-                                       ? d_et_stitched.substr(diff, window)
-                                       : std::string("<end>"));
-            const std::string e = (diff < s_et.size()
-                                       ? s_et.substr(diff, window)
-                                       : std::string("<end>"));
-            fail(label + " sharp vs stitched-default | " + fx.name,
+            const std::string a = (diff < d_body.size() ? d_body.substr(diff, window) : std::string("<end>"));
+            const std::string e = (diff < s_body.size() ? s_body.substr(diff, window) : std::string("<end>"));
+            fail(label + " sharp vs default body | " + fx.name,
                  std::string("first_diff_at=") + std::to_string(diff) +
                      "\n    actual=" + a + "\n    expect=" + e);
         }

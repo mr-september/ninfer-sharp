@@ -108,6 +108,7 @@ struct ChatRenderOptions {
     bool add_vision_id = false;
     std::vector<std::string> tool_jsons;
     std::vector<PromptCacheMarker> cache_markers;
+    ChatStyle chat_style = ChatStyle::Default;
 };
 
 struct RewriteCheckpointByteSpec {
