@@ -110,6 +110,95 @@ for the algorithm and [Serve TTFT benchmark](tools/bench/ttft/) for public-HTTP 
 reuse, Host resume, eviction, shared prefixes, scheduling boundaries, and multimodal load.
 
 ## Performance
+## Chat styles
+
+This fork supports an opt-in **Sharp v22.1 chat style** in addition to the
+default NInfer style. The Sharp style appends a verbatim-from-Jinja
+terseness instruction to the system content and shifts the default
+reasoning effort from `XHigh` to `Medium`. It does not modify the
+embedded `chat_template.jinja` of any `.ninfer` artifact — the overlay is
+applied at render time only.
+
+### Enabling Sharp
+
+For `ninfer-serve`, add `--chat-style sharp-v22.1`:
+
+```bash
+ninfer-serve /path/to/qwen3_8_27b_nvfp4.ninfer \
+  --chat-style sharp-v22.1 \
+  --host 127.0.0.1 --port 8080 --vision
+```
+
+For `ninfer` (the CLI), add `--chat-style sharp-v22.1`:
+
+```bash
+ninfer /path/to/qwen3_8_27b_nvfp4.ninfer \
+  --chat-style sharp-v22.1 \
+  --messages path/to/messages.json
+```
+
+The flag accepts `default` (the default NInfer style) and `sharp-v22.1`.
+Server-wide default only; per-request override via the OpenAI /
+Responses / Anthropic request body is not yet wired.
+
+### Sharp's behavior
+
+| aspect | default | sharp-v22.1 |
+|---|---|---|
+| terseness instruction appended to system content | no | yes (verbatim from Sharp v22.1 Jinja) |
+| default reasoning effort (when none specified) | `XHigh` | `Medium` |
+| explicit `--reasoning-effort none` | no | yes (equivalent to `--no-thinking`) |
+| system block emitted when no system message is present | only if reasoning-effort instructions would be emitted | always (carries the terseness instruction) |
+| empty `<think>` wrappers in history turns | always emitted | omitted (matches Jinja's `{% if message.reasoning_content or message.reasoning %}` guard) |
+| supported `reasoning_effort` levels (CLI / API) | `low` / `medium` / `xhigh` | `low` / `medium` / `high` / `xhigh` (plus `none`; `Minimal` and `Max` are accepted and aliased) |
+
+### Measured impact
+
+End-to-end A/B harness on `qwen3_8_27b_nvfp4.ninfer` with 4,096 max-output
+tokens, MTP3, reasoning effort `medium`:
+
+| task | default completion tokens | sharp completion tokens | reduction |
+|---|---|---|---|
+| `factual`: "Explain how gradient descent works." | 903 | 463 | 49% |
+| `coding`: "Write a Python function to reverse a string without `[::-1]`." | 716 | 235 | 67% |
+| `math`: probability of two red balls from 5+3 | 318 | 173 | 46% |
+| **median** | | | **49%** |
+
+This is comparable to or better than the original Sharp v22.1 Jinja's
+measured −42.2% median, while preserving correctness (Sharp answers
+include derivations and caveats, not bare "5/14" or code without
+explanation). Wall-time reduction is also ~49% median; TTFT is within
+±4 ms of the default style.
+
+### Validation
+
+The Sharp overlay has been validated against:
+
+- **A/B token reduction**: 49% median (qwen3.8-27b, factual/coding/math).
+- **TTFT**: ±4 ms of default (smoke probe across 3 prompt lengths).
+- **HTTP product contract**: `tools/smoke/serve_contract.py` PASSES
+  (`image_prompt_tokens=389` confirms Sharp is applied to image-bearing
+  requests via the `Processor` path).
+- **Robustness**: 6 edge-case fixtures (no system, long system, with
+  cache markers, etc.) all render correctly under Sharp.
+- **Reddit-style leak probes**: 4 cases (no `<think>`, no raw tool
+  markers, no raw tool JSON in content) all clean for both default
+  and Sharp.
+
+A separate validation report with the full numbers, bug-list, and
+diff stats is kept in the project's working notes (vault file
+`Concepts/NInfer-RenderedFragment-Validation-2026-09-03.md`).
+
+### Branch availability
+
+The Sharp feature lives on the `renderedfragment-ported` branch
+of `mr-september/ninfer-sharp`. The `master` branch of this fork
+remains a stable, buildable snapshot at upstream `feaf4dd` (pre-
+refactor) with its own Sharp port on the legacy API. The `dev` branch
+is the working surface for upstream-clean re-development and does
+not contain this feature.
+
+
 
 Published measurements use an RTX 5090. [Performance](docs/performance.md) records the exact
 benchmark profiles and methodology.
