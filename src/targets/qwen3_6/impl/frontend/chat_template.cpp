@@ -338,8 +338,11 @@ RenderedToolsSystemBlock render_tools_system_block(const std::vector<std::string
     return out;
 }
 
-std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
-                                                const ChatRenderOptions& options) {
+// Default chat-style: 3-level reasoning-effort resolution (Low/Medium/XHigh).
+// ThinkingToggle semantics ignores reasoning effort entirely; enable_thinking=false
+// silently drops it; default_effort is XHigh (upstream's choice).
+std::string_view resolve_default_reasoning_instructions(ChatTemplateSemantics semantics,
+                                                       const ChatRenderOptions& options) {
     if (semantics == ChatTemplateSemantics::ThinkingToggle) {
         if (options.reasoning_effort) {
             throw std::invalid_argument("loaded chat template does not support reasoning effort");
@@ -353,18 +356,52 @@ std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
         }
         return {};
     }
-
-    // Sharp v22.1 default reasoning effort is Medium (terseness tradeoff). Default
-    // chat-style keeps the upstream XHigh default.
-    const ReasoningEffort default_effort = (options.chat_style == ninfer::ChatStyle::SharpV22_1)
-                                               ? ReasoningEffort::Medium
-                                               : ReasoningEffort::XHigh;
-    switch (options.reasoning_effort.value_or(default_effort)) {
+    switch (options.reasoning_effort.value_or(ReasoningEffort::XHigh)) {
     case ReasoningEffort::Low:
         return kLowReasoningInstructions;
     case ReasoningEffort::Medium:
         return {};
     case ReasoningEffort::XHigh:
+        return kXHighReasoningInstructions;
+    case ReasoningEffort::None:
+    case ReasoningEffort::Minimal:
+    case ReasoningEffort::High:
+    case ReasoningEffort::Max:
+        // The 3-level default chat-style doesn't accept the 4 extended levels.
+        // Treat them as their closest-supported level (so a stale request doesn't
+        // throw); renderer would have rejected already if the model is strict.
+        switch (options.reasoning_effort.value()) {
+        case ReasoningEffort::None:
+        case ReasoningEffort::Minimal: return kLowReasoningInstructions;
+        default: return kXHighReasoningInstructions;
+        }
+    }
+    throw std::invalid_argument("invalid reasoning effort");
+}
+
+// Sharp v22.1 chat-style: 7-level input mapped to 3 underlying instructions.
+// Matches the Sharp v22.1 Jinja semantics: None/Medium emit no reasoning instruction;
+// Minimal/Low emit kLowReasoningInstructions; High/XHigh/Max emit kXHighReasoningInstructions.
+// Sharp v22.1 silently ignores reasoning effort when thinking is disabled.
+std::string_view resolve_sharp_reasoning_instructions(ChatTemplateSemantics semantics,
+                                                     const ChatRenderOptions& options) {
+    if (semantics == ChatTemplateSemantics::ThinkingToggle) {
+        if (options.reasoning_effort) {
+            throw std::invalid_argument("loaded chat template does not support reasoning effort");
+        }
+        return {};
+    }
+    if (!options.enable_thinking) { return {}; }
+    switch (options.reasoning_effort.value_or(ReasoningEffort::Medium)) {
+    case ReasoningEffort::Medium:
+    case ReasoningEffort::None:
+        return {};
+    case ReasoningEffort::Minimal:
+    case ReasoningEffort::Low:
+        return kLowReasoningInstructions;
+    case ReasoningEffort::High:
+    case ReasoningEffort::XHigh:
+    case ReasoningEffort::Max:
         return kXHighReasoningInstructions;
     }
     throw std::invalid_argument("invalid reasoning effort");
@@ -445,6 +482,12 @@ PromptCapabilities CompiledChatTemplate::capabilities() const noexcept {
         result.reasoning_effort.medium         = true;
         result.reasoning_effort.xhigh          = true;
         result.reasoning_effort.default_effort = ReasoningEffort::XHigh;
+        if (chat_style_ == ChatStyle::SharpV22_1) {
+            // Sharp v22.1 also accepts 'high' reasoning effort; default shifts to Medium
+            // for terseness/brevity trade-off.
+            result.reasoning_effort.high          = true;
+            result.reasoning_effort.default_effort = ReasoningEffort::Medium;
+        }
     }
     return result;
 }
@@ -476,7 +519,9 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
 
     const bool effort_template = semantics_ == ChatTemplateSemantics::ReasoningEffort;
     const std::string_view reasoning_instructions =
-        resolve_reasoning_instructions(semantics_, options);
+        chat_style_ == ninfer::ChatStyle::SharpV22_1
+            ? resolve_sharp_reasoning_instructions(semantics_, options)
+            : resolve_default_reasoning_instructions(semantics_, options);
 
     std::size_t message_begin = 0;
     RenderedFragment leading_instruction_raw;
@@ -492,6 +537,13 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
             slice_fragment(leading_instruction_raw, leading_trim_begin, leading_trim_end);
         message_begin = 1;
     }
+
+    // Sharp v22.1: when no system message is provided, the terseness instruction
+    // still needs to live somewhere. Capture it as a flag so the system-block
+    // emission branch below can emit it directly without skipping the user
+    // message (messages[0] in this case).
+    const bool sharp_needs_synthetic_system =
+        chat_style_ == ChatStyle::SharpV22_1 && message_begin == 0;
 
     RenderBuilder rendered;
     std::vector<std::size_t> tool_boundaries;
@@ -515,9 +567,19 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
             rendered.append(leading_instruction);
             rendered.append_template("<|im_end|>\n");
         }
-    } else if (!reasoning_instructions.empty()) {
+    } else if (sharp_needs_synthetic_system || !reasoning_instructions.empty()) {
+        // Sharp v22.1 always emits a system block; the synthetic one carries only
+        // the terseness instruction. Default chat-style emits only when there
+        // are actual reasoning instructions to convey.
         rendered.append_template("<|im_start|>system\n");
-        rendered.append_template(reasoning_instructions);
+        if (sharp_needs_synthetic_system) {
+            instruction_begin = rendered.size();
+            rendered.append_template(kSharpV22_1TerseInstruction);
+        }
+        if (!reasoning_instructions.empty()) {
+            if (sharp_needs_synthetic_system) { rendered.append_template("\n\n"); }
+            rendered.append_template(reasoning_instructions);
+        }
         rendered.append_template("<|im_end|>\n");
     }
 
@@ -636,7 +698,13 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
         }
         rendered.append_template("<|im_start|>assistant\n");
         add_rewrite_execution_boundary();
-        if (keep_thinking) {
+        // Sharp v22.1 omits the thinking wrapper entirely for history turns that
+        // carry no reasoning, matching the Jinja `{% if message.reasoning_content or
+        // message.reasoning %}` guard. Default chat-style keeps an empty wrapper.
+        const bool is_history_turn = static_cast<long>(i) <= last_query_index;
+        const bool emit_think = keep_thinking && !(chat_style_ == ninfer::ChatStyle::SharpV22_1 &&
+                                                   is_history_turn && reasoning.text.empty());
+        if (emit_think) {
             rendered.append_template("<think>\n");
             add_rewrite_execution_boundary();
             rendered.append(reasoning);

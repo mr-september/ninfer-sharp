@@ -64,10 +64,15 @@ KvCapacityPolicy parse_kv_capacity(const char* text) {
     return KvCapacityPolicy::explicit_capacity(parse_u32(text, "kv-capacity"));
 }
 
-ReasoningEffort parse_reasoning_effort(std::string_view text) {
+ReasoningEffort parse_reasoning_effort(std::string_view text, bool& force_disable_thinking) {
     if (text == "low") { return ReasoningEffort::Low; }
     if (text == "medium") { return ReasoningEffort::Medium; }
     if (text == "xhigh") { return ReasoningEffort::XHigh; }
+    if (text == "none") {
+        // CLI sugar: --reasoning-effort none is equivalent to --no-thinking.
+        force_disable_thinking = true;
+        return ReasoningEffort::Medium;
+    }
     throw std::invalid_argument("invalid reasoning-effort: " + std::string(text));
 }
 
@@ -155,7 +160,12 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--thinking-budget") {
             options.thinking_budget = parse_u32(value(arg), "thinking-budget");
         } else if (arg == "--reasoning-effort") {
-            options.reasoning_effort = parse_reasoning_effort(value(arg));
+            bool force_no_thinking = false;
+            options.reasoning_effort = parse_reasoning_effort(value(arg), force_no_thinking);
+            if (force_no_thinking) {
+                options.enable_thinking = false;
+                options.reasoning_effort = std::nullopt;  // 'none' == --no-thinking
+            }
         } else if (arg == "--chat-style") {
             options.chat_style = parse_chat_style(value(arg));
         } else if (arg == "--vision") {

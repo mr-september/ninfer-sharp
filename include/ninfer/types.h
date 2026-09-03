@@ -281,14 +281,19 @@ struct ChatMessage {
 };
 
 enum class ReasoningEffort : std::uint8_t {
+    None,
+    Minimal,
     Low,
     Medium,
+    High,
     XHigh,
+    Max,
 };
 
 struct ReasoningEffortCapabilities {
     bool low    = false;
     bool medium = false;
+    bool high   = false;
     bool xhigh  = false;
     std::optional<ReasoningEffort> default_effort;
 
@@ -298,8 +303,17 @@ struct ReasoningEffortCapabilities {
             return low;
         case ReasoningEffort::Medium:
             return medium;
+        case ReasoningEffort::High:
+            return high;
         case ReasoningEffort::XHigh:
             return xhigh;
+        // None/Minimal/Max are accepted values (Sharp v22.1 spec) but they alias
+        // onto the 3 base instructions at the render layer; report them as
+        // unsupported so the model is steered to the closest supported level.
+        case ReasoningEffort::None:
+        case ReasoningEffort::Minimal:
+        case ReasoningEffort::Max:
+            return false;
         }
         return false;
     }

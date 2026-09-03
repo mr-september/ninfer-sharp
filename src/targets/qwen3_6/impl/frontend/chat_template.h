@@ -138,10 +138,21 @@ enum class ChatTemplateSemantics : std::uint8_t {
 
 // Sharp v22.1 chat-style terseness instruction, appended to the leading system
 // content by the Sharp overlay. Exposed so tests can reference the production
-// constant instead of duplicating the string.
+// constant instead of duplicating the string. Verbatim from Sharp v22.1
+// chat_template.jinja (_terse block); preserves the nuanced contract that
+// strips filler/preamble/transitions but never drops correctness, caveats,
+// or uncertainty for brevity.
 inline constexpr std::string_view kSharpV22_1TerseInstruction =
-    "You are a helpful assistant. Use as little text as possible while still being accurate and "
-    "informative. Be concise. Prefer shorter responses when possible. Only answer what was asked.";
+    "Answer directly, after thinking. Lead with the answer, then only what it needs to be "
+    "correct and usable.\n"
+    "Never: open with preamble or pleasantries; restate the question; add filler transitions; "
+    "hedge with niceties; or repeat a point you've already made.\n"
+    "Always: keep essential steps, caveats, uncertainties, and specifics \u2014 never drop "
+    "correctness or a needed warning for brevity. Keep the final answer lean. Use the least "
+    "structure that conveys it (plain prose when short; lists or code only when they earn their "
+    "place). If genuinely uncertain, say so and explain why \u2014 never omit uncertainty for the "
+    "sake of brevity.\n"
+    "If a user request is genuinely ambiguous, ask a sharp question, don't guess.";
 
 class CompiledChatTemplate {
 public:
